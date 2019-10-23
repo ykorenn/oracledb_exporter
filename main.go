@@ -25,7 +25,7 @@ var (
   listenAddress = flag.String("web.listen-address", ":9161", "Address to listen on for web interface and telemetry.")
   metricPath    = flag.String("web.telemetry-path", "/metrics", "Path under which to expose metrics.")
   landingPage   = []byte("<html><head><title>Oracle DB Exporter " + Version + "</title></head><body><h1>Oracle DB Exporter " + Version + "</h1><p><a href='" + *metricPath + "'>Metrics</a></p></body></html>")
-  defaultFileMetrics = flag.String("default.metrics", "oracledb-exporter-metrics.toml", "File with default metrics in a TOML file.")
+  defaultFileMetrics = flag.String("default.metrics", "default-metrics.toml", "File with default metrics in a TOML file.")
   customMetrics = flag.String("custom.metrics", os.Getenv("CUSTOM_METRICS"), "File that may contain various custom metrics in a TOML file.")
   queryTimeout  = flag.String("query.timeout", "5", "Query timeout (in seconds).")
 )
@@ -52,7 +52,7 @@ type Metrics struct {
   Metric []Metric
 }
 
-// Metrics to scrap. Use external file (oracledb-exporter-metrics.toml and custom if provided)
+// Metrics to scrap. Use external file (default-metrics.toml and custom if provided)
 var (
   metricsToScrap Metrics
   additionalMetrics Metrics
