@@ -5,6 +5,11 @@ metricsdesc = { value= "Gauge metric with count of sessions by status and type."
 request = "SELECT status, type, COUNT(*) as value FROM v$session GROUP BY status, type"
 
 [[metric]]
+context = "process"
+metricsdesc = { count="Gauge metric with count of processes." }
+request = "SELECT COUNT(*) as count FROM v$process"
+
+[[metric]]
 context = "resource"
 labels = [ "resource_name" ]
 metricsdesc = { current_utilization= "Generic counter metric from v$resource_limit view in Oracle (current value).", limit_value="Generic counter metric from v$resource_limit view in Oracle (limit value)." }
@@ -13,25 +18,20 @@ request="SELECT resource_name,current_utilization,limit_value FROM v$resource_li
 [[metric]]
 context = "asm_diskgroup"
 labels = [ "name" ]
-metricsdesc = { total = "Total size of ASM disk group.", free = "Free space available on ASM disk group." }
-request = "SELECT name,total_mb*1024*1024 as total,free_mb*1024*1024 as free FROM v$asm_diskgroup"
+metricsdesc = { used_mb = "used size of ASM disk group.", free_mb = "free space available on ASM disk group." }
+request = "SELECT name, free_mb, (total_mb - free_mb) as used_mb FROM v$asm_diskgroup"
 ignorezeroresult = true
 
 [[metric]]
-context = "activity"
-metricsdesc = { value="Generic counter metric from v$sysstat view in Oracle." }
-fieldtoappend = "name"
+context = "user_activity"
+labels = [ "name" ]
+metricsdesc = { value="Generic counter metric name from v$sysstat view in Oracle.", value="Generic counter metric value from v$sysstat view in Oracle." }
 request = "SELECT name, value FROM v$sysstat WHERE name IN ('parse count (total)', 'execute count', 'user commits', 'user rollbacks')"
 
 [[metric]]
-context = "process"
-metricsdesc = { count="Gauge metric with count of processes." }
-request = "SELECT COUNT(*) as count FROM v$process"
-
-[[metric]]
 context = "wait_time"
-metricsdesc = { value="Generic counter metric from v$waitclassmetric view in Oracle." }
-fieldtoappend= "wait_class"
+labels = [ "wait_class" ]
+metricsdesc = { wait_class="Generic counter metric from v$waitclassmetric view in Oracle.", value="Generic counter metric from v$waitclassmetric view in Oracle (value)." }
 request = '''
 SELECT
   n.wait_class as WAIT_CLASS,
@@ -43,78 +43,104 @@ WHERE
 '''
 
 [[metric]]
+context = "physical_bytes"
+labels = [ "metric_name" ]
+metricsdesc = { metric_name="Generic counter metric from v$sysmetric view in Oracle.", value="Generic counter metric from v$sysmetric view in Oracle (value)." }
+request = "select metric_name,value from v$sysmetric where metric_name like 'Physical%Total Bytes Per Sec' "
+
+[[metric]]
+context = "physical_iops"
+labels = [ "metric_name" ]
+metricsdesc = { metric_name="Generic counter metric from v$sysmetric view in Oracle.", value="Generic counter metric from v$sysmetric view in Oracle (value)." }
+request = "select metric_name,value from v$sysmetric where metric_name like 'Physical%Total IO Requests Per Sec' "
+
+[[metric]]
+context = "cache_hit_ratio"
+labels = [ "metric_name" ]
+metricsdesc = { metric_name="Generic counter metric from v$sysmetric view in Oracle.", value="Generic counter metric from v$sysmetric view in Oracle (value)." }
+request = "select metric_name,value from v$sysmetric where metric_name like '%Hit Ratio' "
+
+[[metric]]
 context = "tablespace"
-labels = [ "tablespace", "type" ]
-metricsdesc = { bytes = "Generic counter metric of tablespaces bytes in Oracle.", max_bytes = "Generic counter metric of tablespaces max bytes in Oracle.", free = "Generic counter metric of tablespaces free bytes in Oracle." }
+labels = [ "tablespace_name" ]
+metricsdesc = { total_free = "total free", total_used = "total used", perc_free="perc free" }
 request = '''
-  SELECT
-    Z.name       as tablespace,
-    dt.contents  as type,
-    Z.bytes      as bytes,
-    Z.max_bytes  as max_bytes,
-    Z.free_bytes as free
-  FROM
-  (
-    SELECT
-      X.name                   as name,
-      SUM(nvl(X.free_bytes,0)) as free_bytes,
-      SUM(X.bytes)             as bytes,
-      SUM(X.max_bytes)         as max_bytes
-    FROM
-      (
-        SELECT
-          ddf.tablespace_name as name,
-          ddf.status as status,
-          ddf.bytes as bytes,
-          sum(coalesce(dfs.bytes, 0)) as free_bytes,
-          CASE
-            WHEN ddf.maxbytes = 0 THEN ddf.bytes
-            ELSE ddf.maxbytes
-          END as max_bytes
-        FROM
-          sys.dba_data_files ddf,
-          sys.dba_tablespaces dt,
-          sys.dba_free_space dfs
-        WHERE ddf.tablespace_name = dt.tablespace_name
-        AND ddf.file_id = dfs.file_id(+)
-        GROUP BY
-          ddf.tablespace_name,
-          ddf.file_name,
-          ddf.status,
-          ddf.bytes,
-          ddf.maxbytes
-      ) X
-    GROUP BY X.name
-    UNION ALL
-    SELECT
-      Y.name                   as name,
-      MAX(nvl(Y.free_bytes,0)) as free_bytes,
-      SUM(Y.bytes)             as bytes,
-      SUM(Y.max_bytes)         as max_bytes
-    FROM
-      (
-        SELECT
-          dtf.tablespace_name as name,
-          dtf.status as status,
-          dtf.bytes as bytes,
-          (
-            SELECT
-              ((f.total_blocks - s.tot_used_blocks)*vp.value)
-            FROM
-              (SELECT tablespace_name, sum(used_blocks) tot_used_blocks FROM gv$sort_segment WHERE  tablespace_name!='DUMMY' GROUP BY tablespace_name) s,
-              (SELECT tablespace_name, sum(blocks) total_blocks FROM dba_temp_files where tablespace_name !='DUMMY' GROUP BY tablespace_name) f,
-              (SELECT value FROM v$parameter WHERE name = 'db_block_size') vp
-            WHERE f.tablespace_name=s.tablespace_name AND f.tablespace_name = dtf.tablespace_name
-          ) as free_bytes,
-          CASE
-            WHEN dtf.maxbytes = 0 THEN dtf.bytes
-            ELSE dtf.maxbytes
-          END as max_bytes
-        FROM
-          sys.dba_temp_files dtf
-      ) Y
-    GROUP BY Y.name
-  ) Z, sys.dba_tablespaces dt
-  WHERE
-    Z.name = dt.tablespace_name
-'''
+SELECT *
+FROM
+(
+WITH my_ddf AS
+    (
+         SELECT file_id, tablespace_name, 
+         DECODE (autoextensible, 'YES', GREATEST (BYTES, maxbytes), BYTES ) mysize,
+         DECODE (autoextensible, 'YES', CASE WHEN (maxbytes > BYTES) THEN (maxbytes - BYTES) ELSE 0 END, 0 ) growth
+         FROM dba_data_files
+	)
+SELECT   my_ddf.tablespace_name,
+         ROUND (SUM (my_ddf.mysize)) autoext_maxsize,
+         ROUND (SUM (growth)) growth,
+         ROUND ((SUM (NVL (freebytes, 0)))) curr_df_free,
+         ROUND ((SUM (NVL (freebytes, 0)) + SUM (growth))) total_free,
+         ROUND (SUM (my_ddf.mysize)) - ( ROUND ((SUM (NVL (freebytes, 0)) + SUM (growth)))) as total_used,       
+         ROUND ((SUM (NVL (freebytes, 0)) + SUM (growth)) / SUM (my_ddf.mysize) * 100 ) perc_free
+    FROM my_ddf, (SELECT file_id, SUM (BYTES) freebytes FROM dba_free_space GROUP BY file_id) dfs
+    WHERE my_ddf.file_id = dfs.file_id(+) 
+GROUP BY my_ddf.tablespace_name
+)
+UNION
+SELECT * FROM
+(
+WITH my_ddf AS
+    (
+		 SELECT tablespace_name,
+         DECODE (autoextensible, 'YES', GREATEST (BYTES, maxbytes), BYTES ) mysize,
+         DECODE (autoextensible, 'YES', CASE WHEN (maxbytes > BYTES) THEN (maxbytes - BYTES) ELSE 0 END, 0 ) growth
+         FROM dba_temp_files
+	)
+SELECT   my_ddf.tablespace_name,
+         ROUND (SUM (my_ddf.mysize)) as autoext_maxsize,
+         ROUND (SUM (growth)) as growth,
+         ROUND ((SUM (NVL (free_space, 0)))) as curr_df_free,
+         ROUND ((SUM (NVL (free_space, 0)) + SUM (growth))) as total_free,
+         ROUND (SUM (my_ddf.mysize)) - ( ROUND ((SUM (NVL (free_space, 0)) + SUM (growth)))) as total_used,       
+         ROUND ((SUM (NVL (free_space, 0)) + SUM (growth)) / SUM (my_ddf.mysize) * 100 ) as perc_free
+    FROM my_ddf, (SELECT tablespace_name, free_space FROM dba_temp_free_space) dfs
+   WHERE my_ddf.tablespace_name = dfs.tablespace_name(+)    
+GROUP BY my_ddf.tablespace_name
+) '''
+
+[[metric]]
+context = "blockers"
+labels = [ "sql_id" ]
+metricsdesc = { sql_id = "blocker sql_id", sid = "blocker sid" }
+metricstype = { sid = "gauge" }
+request = "select s.sql_id, b.HOLDING_SESSION as sid from  v$session s, dba_blockers b where b.HOLDING_SESSION=s.BLOCKING_SESSION"
+ignorezeroresult = true
+
+[[metric]]
+context = "waiters"
+labels = [ "sql_id" ]
+metricsdesc = { sql_id = "waiter sql_id", sid = "waiter sid" }
+metricstype = { sid = "gauge" }
+request = "select s.sql_id, w.WAITING_SESSION as sid from  v$session s, dba_waiters w where w.WAITING_SESSION=s.SID"
+ignorezeroresult = true
+
+
+[[metric]]
+context = "database"
+labels = [ "dbname" ]
+metricsdesc = { dbname = "database name" }
+request = "select name as dbname, 0 as value from v$database"
+
+[[metric]]
+context = "uptime"
+metricsdesc = { value = "database uptime" }
+request = "select (sysdate-startup_time) as value from v$instance"
+
+[[metric]]
+context = "database_info"
+labels = [ "database_status", "database_role" ]
+metricsdesc = { value = "database information" }
+request = "select status as database_status, database_role, 1 as value from v$instance, v$database where rownum=1"
+
+
+
